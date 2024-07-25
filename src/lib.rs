@@ -1,6 +1,8 @@
-//#![no_std]
+#![no_std]
 
 use core::iter::zip;
+
+type Board = [[Piece; 8]; 8];
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum Team {
@@ -24,7 +26,7 @@ pub enum Piece {
     Empty,
     Pawn(Team),
     Rook(Team),
-    Castle(Team),
+    Knight(Team),
     Bishop(Team),
     King(Team),
     Queen(Team),
@@ -37,7 +39,7 @@ impl Piece {
             Empty => " ",
             Pawn(..) => "P",
             Rook(..) => "R",
-            Castle(..) => "C",
+            Knight(..) => "C",
             Bishop(..) => "B",
             King(..) => "K",
             Queen(..) => "Q",
@@ -47,7 +49,7 @@ impl Piece {
     pub fn team(self) -> Option<Team> {
         match self {
             Empty => None,
-            Pawn(team) | Rook(team) | Castle(team) | Bishop(team) | King(team) | Queen(team) => {
+            Pawn(team) | Rook(team) | Knight(team) | Bishop(team) | King(team) | Queen(team) => {
                 Some(team)
             }
         }
@@ -67,11 +69,7 @@ pub enum MoveError {
     Indecipherable,
 }
 
-pub fn decipher_move(
-    previous: [[Piece; 8]; 8],
-    new: [[Piece; 8]; 8],
-    to_move: Team,
-) -> Result<Move, MoveError> {
+pub fn decipher_move(previous: Board, new: Board, to_move: Team) -> Result<Move, MoveError> {
     use MoveError::*;
 
     let diff = zip(previous, new)
@@ -111,38 +109,49 @@ pub fn decipher_move(
     let moving1 = moving.next().unwrap();
     let opposite = moving.next();
 
-    Ok(if moving0.0 == moving1.1 && moving0.1 == Empty {
-        if opposite.is_some() && opposite.unwrap().1 != moving0.0 {
-            return Err(Indecipherable);
+    let (moved_piece, removed_piece, moved_from, moved_to, leftover_piece) =
+        if moving0.0 == moving1.1 {
+            (moving1.1, moving1.0, moving0.2, moving1.2, moving0.1)
+        } else if moving0.1 == moving1.0 {
+            (moving0.1, moving0.0, moving1.2, moving0.2, moving1.1)
         } else {
-            Move(moving0.2, moving1.2)
-        }
-    } else if moving0.1 == moving1.0 && moving0.0 == Empty {
-        if opposite.is_some() && opposite.unwrap().1 != moving0.1 {
             return Err(Indecipherable);
-        } else {
-            Move(moving1.2, moving0.2)
-        }
-    } else {
+        };
+
+    if moved_piece.team() != Some(to_move) {
         return Err(Indecipherable);
-    })
+    }
+    if leftover_piece != Empty {
+        return Err(Indecipherable);
+    }
+    if removed_piece.team() == Some(to_move) {
+        return Err(Indecipherable);
+    }
+
+    Ok(
+        if opposite.is_some() && opposite.unwrap().0 != removed_piece {
+            return Err(Indecipherable);
+        } else {
+            Move(moved_from, moved_to)
+        },
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::MoveError::*;
+    use super::*;
 
     macro_rules! board {
         (@ K) => { King(Black) };
         (@ Q) => { Queen(Black) };
-        (@ C) => { Castle(Black) };
+        (@ N) => { Knight(Black) };
         (@ B) => { Bishop(Black) };
         (@ R) => { Rook(Black) };
         (@ P) => { Pawn(Black) };
         (@ k) => { King(White) };
         (@ q) => { Queen(White) };
-        (@ c) => { Castle(White) };
+        (@ n) => { Knight(White) };
         (@ b) => { Bishop(White) };
         (@ r) => { Rook(White) };
         (@ p) => { Pawn(White) };
@@ -152,35 +161,52 @@ mod tests {
         }};
     }
 
+    fn flip_board(mut board: Board) -> Board {
+        for piece in board.iter_mut().flatten() {
+            *piece = match piece {
+                Empty => Empty,
+                Pawn(team) => Pawn(team.other()),
+                Rook(team) => Rook(team.other()),
+                Knight(team) => Knight(team.other()),
+                Bishop(team) => Bishop(team.other()),
+                King(team) => King(team.other()),
+                Queen(team) => Queen(team.other()),
+            };
+        }
+        board
+    }
+
     macro_rules! check_move {
-        ({$($old:tt)* } { $($new:tt)* } $move:expr) => {{
+        ($to_move:ident to move {$($old:tt)* } { $($new:tt)* } $move:expr) => {{
             let old_board = board! { $($old)* };
             let new_board = board! { $($new)* };
-            assert_eq!(decipher_move(old_board, new_board, Black), $move);
+            assert_eq!(decipher_move(old_board, new_board, $to_move), $move);
+            assert_eq!(decipher_move(flip_board(old_board), flip_board(new_board), $to_move.other()), $move);
         }};
     }
 
     #[test]
-    fn simple_move_macro() {
+    fn simple_move() {
         check_move! {
+            Black to move
             {
-            C R B Q K B R C
+            R N B Q K B N R
             . . . . . . . .
             . . . . . . . .
             . . . . . . . .
             . . . . . . . .
             . . . . . . . .
             . . . . . . . .
-            c r b q k b r c
+            r n b q k b n r
             }{
-            . R B Q K B R C
+            . N B Q K B N R
             . . . . . . . .
             . . . . . . . .
             . . . . . . . .
             . . . . . . . .
             . . . . . . . .
-            C . . . . . . .
-            c r b q k b r c
+            R . . . . . . .
+            r n b q k b n r
             }
             Ok(Move(Position(0, 0), Position(0, 6)))
         };
@@ -188,27 +214,136 @@ mod tests {
 
     #[test]
     fn making_move() {
-        check_move!{
+        check_move! {
+            Black to move
             {
-            C R B Q K B R C
+            R N B Q K B N R
             . . . . . . . .
             . . . . . . . .
             . . . . . . . .
             . . . . . . . .
             . . . . . . . .
             . . . . . . . .
-            c r b q k b r c
+            r n b q k b n r
             }{
-            . R B Q K B R C
+            . N B Q K B N R
             . . . . . . . .
             . . . . . . . .
             . . . . . . . .
             . . . . . . . .
             . . . . . . . .
             . . . . . . . .
-            c r b q k b r c
+            r n b q k b n r
             }
             Err(MakingMove)
+        };
+    }
+
+    #[test]
+    fn take_piece() {
+        check_move! {
+            Black to move
+            {
+            R N B Q K B N R
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            p . . . . . . .
+            r n b q k b n r
+            }{
+            . N B Q K B N R
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            R . . . . . . .
+            r n b q k b n r
+            }
+            Ok(Move(Position(0, 0), Position(0, 6)))
+        };
+    }
+
+    #[test]
+    fn invalid_take_piece() {
+        check_move! {
+            Black to move
+            {
+            R N B Q K B N R
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            P . . . . . . .
+            r n b q k b n r
+            }{
+            . N B Q K B N R
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            R . . . . . . .
+            r n b q k b n r
+            }
+            Err(Indecipherable)
+        };
+    }
+
+    #[test]
+    fn no_move() {
+        check_move! {
+            Black to move
+            {
+            R N B Q K B N R
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            r n b q k b n r
+            }{
+            R N B Q K B N R
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            r n b q k b n r
+            }
+            Err(NoMove)
+        };
+    }
+
+    #[test]
+    fn other_team() {
+        check_move! {
+            White to move
+            {
+            R N B Q K B N R
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            r n b q k b n r
+            }{
+            R n B Q K B N R
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            . . . . . . . .
+            r . b q k b n r
+            }
+            Ok(Move(Position(1, 7), Position(1, 0)))
         };
     }
 }
