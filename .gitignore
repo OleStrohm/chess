@@ -1,0 +1,8 @@
+/firmware/target
+/chessboard-backups
+*.bak
+*.lck
+/output
+chessboard.zip
+*.FCBak
+_autosave-*
